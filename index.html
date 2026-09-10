@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VLA JSON &harr; CSV Tool</title>
+<script src="./xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1c2024; --muted:#6b7280;
+    --line:#e3e6ea; --accent:#2f6feb; --accent-ink:#fff; --ok:#0f7b4a; --err:#c0362c;
+    --drop:#eef3fe;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#15171a; --card:#1e2125; --ink:#e8eaed; --muted:#9aa0a6;
+      --line:#31353b; --accent:#4c8dff; --accent-ink:#0b1220; --ok:#4ecb8a; --err:#ff7b6e;
+      --drop:#1b2434;
+    }
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:32px 20px 64px}
+  .wrap{max-width:920px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}
+  p.sub{color:var(--muted);margin:0 0 24px}
+  .grid{display:grid;gap:20px;grid-template-columns:1fr 1fr}
+  @media (max-width:760px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .card h2{font-size:15px;margin:0 0 4px}
+  .card .hint{color:var(--muted);font-size:12.5px;margin:0 0 14px}
+  .drop{border:1.5px dashed var(--line);border-radius:10px;padding:24px 16px;text-align:center;color:var(--muted);cursor:pointer;transition:.12s background,.12s border-color}
+  .drop.over{background:var(--drop);border-color:var(--accent);color:var(--ink)}
+  .drop strong{color:var(--ink)}
+  input[type=file]{display:none}
+  button{margin-top:14px;width:100%;background:var(--accent);color:var(--accent-ink);border:0;border-radius:9px;padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .log{margin-top:14px;font-size:12.5px;white-space:pre-wrap;border-top:1px solid var(--line);padding-top:12px;min-height:20px}
+  .log .ok{color:var(--ok)}
+  .log .err{color:var(--err)}
+  .opt{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12.5px;color:var(--muted)}
+  footer{max-width:920px;margin:28px auto 0;color:var(--muted);font-size:12px}
+  code{background:var(--drop);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VLA JSON &harr; CSV converter</h1>
+  <p class="sub">Converts a Label&nbsp;Studio VLA video export to the <code>master</code> / <code>unique</code> spreadsheet, and back. All processing is local &mdash; nothing is uploaded.</p>
+
+  <div class="grid">
+    <!-- JSON -> sheet -->
+    <div class="card">
+      <h2>JSON &rarr; CSV / Excel</h2>
+      <p class="hint">Upload one VLA <code>.json</code>. <b>Excel</b> output = one file with a <b>master</b> tab and a <b>unique</b> tab; master's <code>t2</code>/<code>t3</code> cells are live formulas into <b>unique</b> (edit a description on the unique tab &rarr; every matching master row updates). <b>CSV</b> output = two plain files, no linking (CSV can't hold tabs or formulas).</p>
+      <label class="drop" id="dropJ">
+        <input type="file" id="fileJ" accept=".json,application/json" />
+        <span><strong>Click</strong> or drop a <strong>.json</strong> file</span>
+      </label>
+      <div class="opt">
+        <input type="radio" name="fmt" id="fmtXlsx" value="xlsx" checked />
+        <label for="fmtXlsx">Excel (.xlsx, two linked tabs)</label>
+        <input type="radio" name="fmt" id="fmtCsv" value="csv" />
+        <label for="fmtCsv">2 CSV files (master + unique)</label>
+      </div>
+      <button id="runJ" disabled>Convert to spreadsheet</button>
+      <div class="log" id="logJ"></div>
+    </div>
+
+    <!-- sheet -> JSON -->
+    <div class="card">
+      <h2>CSV / Excel &rarr; JSON</h2>
+      <p class="hint">Upload the <code>.xlsx</code> (both tabs; text is taken from the <b>unique</b> tab so your edits there are applied) or a single <code>master</code> <code>.csv</code>. Rebuilds a partial JSON in the same template. Fields not in the sheet (object labels, relations, boxes, body-part labels, QC) are emitted empty.</p>
+      <label class="drop" id="dropC">
+        <input type="file" id="fileC" accept=".csv,.xlsx,text/csv" />
+        <span><strong>Click</strong> or drop a <strong>.csv</strong> / <strong>.xlsx</strong> file</span>
+      </label>
+      <button id="runC" disabled>Convert to JSON</button>
+      <div class="log" id="logC"></div>
+    </div>
+  </div>
+
+  <footer>
+    <b>master</b> columns: <code>t3 start</code> &middot; <code>t3 end</code> (child segment frames) &middot; <code>t2 start</code> &middot; <code>t2 end</code> (parent action frames) &middot; <code>t2 id</code> &middot; <code>t2</code> &middot; <code>t3 id</code> &middot; <code>t3</code>. Frames are plain integers so spreadsheets won't turn them into dates. In the <code>.xlsx</code>, <code>t2</code>/<code>t3</code> are <code>VLOOKUP</code> formulas resolving the ids against the <b>unique</b> tab.<br />
+    <b>unique</b> columns: <code>t2 id</code> &middot; <code>Unique t2</code> &middot; <code>t2 occurrences</code> &middot; <code>t3 id</code> &middot; <code>Unique t3</code> &middot; <code>t3 occurrences</code> (two independent lists, side by side). Edit text in the <code>Unique&nbsp;t2</code> / <code>Unique&nbsp;t3</code> columns; do not change the id columns.<br />
+    Round-trip: every T2 frame range is preserved exactly. Only the body-part label on each T3 segment is lost (rebuilt as <code>"segment"</code>).
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- helpers ---------- */
+function hexId(n){let s="";const c="0123456789abcdef";for(let i=0;i<n;i++)s+=c[Math.floor(Math.random()*16)];return s;}
+function download(name,blob){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+function setLog(el,msg,cls){ el.innerHTML = cls ? '<span class="'+cls+'">'+msg+'</span>' : msg; }
+
+/* ---------- JSON -> rows ---------- */
+function jsonToTables(doc){
+  const ann = doc && doc.data && Array.isArray(doc.data.annotations) ? doc.data.annotations
+            : (doc && Array.isArray(doc.annotations) ? doc.annotations : null);
+  if(!ann || !ann.length || !Array.isArray(ann[0].result)) throw new Error("Could not find data.annotations[0].result in this JSON.");
+  const result = ann[0].result;
+
+  const byId = new Map();
+  for(const r of result){
+    if((r.from_name==="segments" || r.from_name==="description") && r.id){
+      if(!byId.has(r.id)) byId.set(r.id,{});
+      byId.get(r.id)[r.from_name]=r;
+    }
+  }
+  const T2=[], T3=[];
+  for(const v of byId.values()){
+    if(!v.segments || !v.description) continue;
+    const labels = (v.segments.value && v.segments.value.timelinelabels) || [];
+    const rng = (v.segments.value && v.segments.value.ranges && v.segments.value.ranges[0]) || {};
+    const txt = (v.description.value && v.description.value.text && v.description.value.text[0]) || "";
+    const rec = {s:Number(rng.start), e:Number(rng.end), txt:txt};
+    if(!isFinite(rec.s) || !isFinite(rec.e)) continue;
+    (labels[0]==="action" ? T2 : T3).push(rec);
+  }
+  if(!T3.length) throw new Error("No T3 (body-part) segments found.");
+  const bySE = (a,b)=> a.s-b.s || a.e-b.e;
+  T2.sort(bySE); T3.sort(bySE);
+
+  const parentOf = t => {
+    for(const a of T2){ if(a.s<=t.s && a.e>=t.e) return a; }
+    return null;
+  };
+
+  const count = arr => { const m=new Map(); for(const x of arr) m.set(x,(m.get(x)||0)+1); return m; };
+  const sortEntries = m => [...m.entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+  const u2 = sortEntries(count(T2.map(a=>a.txt)));   // [text, count]
+  const u3 = sortEntries(count(T3.map(a=>a.txt)));
+
+  // stable ids: text -> id (1-based, in the sorted order shown on the unique tab)
+  const id2 = new Map(u2.map(([txt],i)=>[txt,i+1]));
+  const id3 = new Map(u3.map(([txt],i)=>[txt,i+1]));
+
+  const master = T3.map(t => {
+    const p = parentOf(t);
+    return {
+      "t3 start": t.s,
+      "t3 end": t.e,
+      "t2 start": p ? p.s : "",
+      "t2 end": p ? p.e : "",
+      "t2 id": p ? id2.get(p.txt) : "",
+      "t2": p ? p.txt : "",
+      "t3 id": id3.get(t.txt),
+      "t3": t.txt
+    };
+  });
+
+  const unique=[];
+  for(let i=0;i<Math.max(u2.length,u3.length);i++){
+    unique.push({
+      "t2 id": u2[i] ? i+1 : "",
+      "Unique t2": u2[i] ? u2[i][0] : "",
+      "t2 occurrences": u2[i] ? u2[i][1] : "",
+      "t3 id": u3[i] ? i+1 : "",
+      "Unique t3": u3[i] ? u3[i][0] : "",
+      "t3 occurrences": u3[i] ? u3[i][1] : ""
+    });
+  }
+  return {master, unique, stats:{t2:T2.length,t3:T3.length,u2:u2.length,u3:u3.length}};
+}
+
+/* ---------- rows -> JSON (partial) ---------- */
+function tablesToJson(masterRows, uniqueRows){
+  const norm = s => (s==null?"":String(s)).trim();
+  const parseRange = v => { const m=norm(v).match(/(-?\d+)\s*-\s*(-?\d+)/); return m?[Number(m[1]),Number(m[2])]:null; };
+  const num = v => { const n = Number(norm(v)); return Number.isFinite(n) ? n : null; };
+
+  // If a unique sheet is supplied, its text is authoritative: master's t2/t3
+  // are resolved through the id columns so edits on the unique tab win.
+  const map2 = new Map(), map3 = new Map();
+  for(const u of (uniqueRows || [])){
+    const i2 = norm(u["t2 id"]), i3 = norm(u["t3 id"]);
+    if(i2) map2.set(i2, norm(u["Unique t2"] ?? u["unique t2"]));
+    if(i3) map3.set(i3, norm(u["Unique t3"] ?? u["unique t3"]));
+  }
+
+  const rows=[];
+  for(const r of masterRows){
+    const id2 = norm(r["t2 id"] ?? r["T2 id"]), id3 = norm(r["t3 id"] ?? r["T3 id"]);
+    let t2 = (id2 && map2.has(id2)) ? map2.get(id2) : norm(r["t2"] ?? r["T2"]);
+    let t3 = (id3 && map3.has(id3)) ? map3.get(id3) : norm(r["t3"] ?? r["T3"]);
+    // preferred: separate numeric columns; fallback: legacy "Time stamp"/"t2 range" ranges
+    let cs = num(r["t3 start"]), ce = num(r["t3 end"]);
+    let ps = num(r["t2 start"]), pe = num(r["t2 end"]);
+    if(cs===null || ce===null){
+      const cr = parseRange(r["Time stamp"] ?? r["Timestamp"] ?? r["time stamp"] ?? r["Time Stamp"]);
+      if(cr){ cs=cr[0]; ce=cr[1]; }
+    }
+    if(ps===null || pe===null){
+      const pr = parseRange(r["t2 range"] ?? r["T2 range"] ?? r["t2range"]);
+      if(pr){ ps=pr[0]; pe=pr[1]; }
+    }
+    if(cs===null && !t3) continue;
+    if(cs===null || ce===null) throw new Error("Row missing a valid t3 start/end (or Time stamp).");
+    const t2r = (ps!==null && pe!==null) ? ps+"-"+pe : "";
+    rows.push({s:cs, e:ce, t2r, t2, t3});
+  }
+  if(!rows.length) throw new Error("No usable rows in the master sheet.");
+  rows.sort((a,b)=> a.s-b.s || a.e-b.e);
+
+  // group into T2 segments: prefer explicit "t2 range" column (exact fidelity);
+  // otherwise fall back to consecutive equal-t2-text runs.
+  const groups=[];
+  for(const r of rows){
+    const g = groups[groups.length-1];
+    const key = r.t2r ? "R:"+r.t2r : "T:"+r.t2;
+    if(g && g.key===key){
+      g.e=Math.max(g.e,r.e); g.s=Math.min(g.s,r.s); g.children.push(r);
+    }else{
+      const pr = parseRange(r.t2r);
+      groups.push({key, t2:r.t2, s: pr?pr[0]:r.s, e: pr?pr[1]:r.e, fixed: !!pr, children:[r]});
+    }
+  }
+  for(const g of groups){ if(!g.fixed){ /* span already tracked from children */ } }
+
+  const result=[];
+  result.push({from_name:"tier1_caption", to_name:"video", type:"textarea", value:{text:[""]}});
+  for(const g of groups){
+    const gid=hexId(12);
+    if(g.t2){
+      result.push({id:gid, from_name:"segments", to_name:"video", type:"timelinelabels", origin:"manual",
+        value:{ranges:[{start:g.s,end:g.e}], timelinelabels:["action"]}});
+      result.push({id:gid, from_name:"description", to_name:"video", type:"textarea", origin:"manual",
+        value:{ranges:[{start:g.s,end:g.e}], text:[g.t2]}});
+    }
+    for(const c of g.children){
+      const cid=hexId(12);
+      result.push({id:cid, from_name:"segments", to_name:"video", type:"timelinelabels", origin:"manual",
+        value:{ranges:[{start:c.s,end:c.e}], timelinelabels:["segment"]}});
+      result.push({id:cid, from_name:"description", to_name:"video", type:"textarea", origin:"manual",
+        value:{ranges:[{start:c.s,end:c.e}], text:[c.t3]}});
+    }
+  }
+
+  return {
+    data:{
+      video:"", video_id:"",
+      outside_ranges:{hand_left:[], hand_right:[], body:[]},
+      qc:{state:"", reviewer:"", reviewer_notes:"", reviewed_at:""},
+      review_flags:[],
+      object_labels:{}, object_display_names:{}
+    },
+    annotations:[{result}]
+  };
+}
+
+/* ---------- CSV parse/build ---------- */
+function parseCsv(text){
+  const rows=[]; let row=[], field="", q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){
+      if(ch==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; }
+      else field+=ch;
+    }else{
+      if(ch==='"') q=true;
+      else if(ch===','){ row.push(field); field=""; }
+      else if(ch==='\n'){ row.push(field); rows.push(row); row=[]; field=""; }
+      else if(ch==='\r'){}
+      else field+=ch;
+    }
+  }
+  if(field.length||row.length){ row.push(field); rows.push(row); }
+  while(rows.length && rows[rows.length-1].every(c=>c==="")) rows.pop();
+  if(!rows.length) return [];
+  const head=rows[0].map(h=>h.trim());
+  return rows.slice(1).map(r=>{const o={};head.forEach((h,i)=>o[h]=r[i]!==undefined?r[i]:"");return o;});
+}
+function buildCsv(objs){
+  if(!objs.length) return "";
+  const head=Object.keys(objs[0]);
+  const esc=v=>{v=v==null?"":String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  return [head.join(","), ...objs.map(o=>head.map(h=>esc(o[h])).join(","))].join("\r\n");
+}
+
+/* Excel workbook where master's t2 / t3 text cells are live VLOOKUP formulas
+   into the unique tab (keyed by id), so editing a description on the unique
+   tab updates every matching master row automatically. */
+const M_HEAD=["t3 start","t3 end","t2 start","t2 end","t2 id","t2","t3 id","t3"];
+const U_HEAD=["t2 id","Unique t2","t2 occurrences","t3 id","Unique t3","t3 occurrences"];
+function buildSyncedWorkbook(master, unique){
+  const wb=XLSX.utils.book_new();
+  const ms=XLSX.utils.json_to_sheet(master,{header:M_HEAD});
+  const us=XLSX.utils.json_to_sheet(unique,{header:U_HEAD});
+  for(let i=0;i<master.length;i++){
+    const r=i+2, m=master[i];
+    if(m["t2 id"]!=="" && m["t2 id"]!=null)
+      ms["F"+r]={t:"s", f:'IFERROR(VLOOKUP(E'+r+',unique!$A:$C,2,FALSE),"")', v:String(m["t2"]||"")};
+    ms["H"+r]={t:"s", f:'IFERROR(VLOOKUP(G'+r+',unique!$D:$F,2,FALSE),"")', v:String(m["t3"]||"")};
+  }
+  XLSX.utils.book_append_sheet(wb, ms, "master");
+  XLSX.utils.book_append_sheet(wb, us, "unique");
+  return wb;
+}
+
+/* ---------- wiring ---------- */
+function wireDrop(dropEl, inputEl, onFile){
+  dropEl.addEventListener("dragover",e=>{e.preventDefault();dropEl.classList.add("over");});
+  dropEl.addEventListener("dragleave",()=>dropEl.classList.remove("over"));
+  dropEl.addEventListener("drop",e=>{
+    e.preventDefault();dropEl.classList.remove("over");
+    if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+  });
+  inputEl.addEventListener("change",()=>{ if(inputEl.files[0]) onFile(inputEl.files[0]); });
+}
+
+let jFile=null, cFile=null;
+const logJ=document.getElementById("logJ"), logC=document.getElementById("logC");
+const runJ=document.getElementById("runJ"), runC=document.getElementById("runC");
+
+wireDrop(document.getElementById("dropJ"), document.getElementById("fileJ"), f=>{
+  jFile=f; runJ.disabled=false; setLog(logJ,"Ready: "+f.name);
+});
+wireDrop(document.getElementById("dropC"), document.getElementById("fileC"), f=>{
+  cFile=f; runC.disabled=false; setLog(logC,"Ready: "+f.name);
+});
+
+runJ.addEventListener("click",async()=>{
+  try{
+    setLog(logJ,"Working…");
+    const doc=JSON.parse(await jFile.text());
+    const {master,unique,stats}=jsonToTables(doc);
+    const base=jFile.name.replace(/\.json$/i,"");
+    const fmt=document.querySelector('input[name=fmt]:checked').value;
+    if(fmt==="csv"){
+      download(base+"__master.csv", new Blob([buildCsv(master)],{type:"text/csv"}));
+      download(base+"__unique.csv", new Blob([buildCsv(unique)],{type:"text/csv"}));
+    }else{
+      const wb=buildSyncedWorkbook(master, unique);
+      const out=XLSX.write(wb,{bookType:"xlsx",type:"array"});
+      download(base+".xlsx", new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+    }
+    setLog(logJ,"Done — master: "+stats.t3+" rows · unique t2: "+stats.u2+" · unique t3: "+stats.u3+" ("+(fmt==="csv"?"2 CSV files":"xlsx, master t2/t3 linked to unique tab")+").","ok");
+  }catch(err){ setLog(logJ,"Error: "+err.message,"err"); }
+});
+
+runC.addEventListener("click",async()=>{
+  try{
+    setLog(logC,"Working…");
+    let masterRows, uniqueRows=null;
+    if(/\.xlsx$/i.test(cFile.name)){
+      const wb=XLSX.read(await cFile.arrayBuffer(),{type:"array"});
+      const mn=wb.SheetNames.find(n=>n.toLowerCase()==="master")||wb.SheetNames[0];
+      masterRows=XLSX.utils.sheet_to_json(wb.Sheets[mn],{defval:""});
+      const un=wb.SheetNames.find(n=>n.toLowerCase()==="unique");
+      if(un) uniqueRows=XLSX.utils.sheet_to_json(wb.Sheets[un],{defval:""});
+    }else{
+      masterRows=parseCsv(await cFile.text());
+    }
+    const out=tablesToJson(masterRows, uniqueRows);
+    const base=cFile.name.replace(/(__master)?\.(csv|xlsx)$/i,"");
+    download(base+".vla.json", new Blob([JSON.stringify(out,null,1)],{type:"application/json"}));
+    const nSeg=out.annotations[0].result.filter(r=>r.from_name==="segments").length;
+    setLog(logC,"Done — "+masterRows.length+" rows in → "+nSeg+" segments out. JSON downloaded.","ok");
+  }catch(err){ setLog(logC,"Error: "+err.message,"err"); }
+});
+</script>
+</body>
+</html>

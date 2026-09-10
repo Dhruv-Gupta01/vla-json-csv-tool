@@ -1,0 +1,6 @@
+# sample data / generated outputs — not part of the app
+*.json
+master.csv
+unique.csv
+*.xlsx
+_test_*
