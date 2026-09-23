@@ -69,7 +69,7 @@
     <!-- sheet -> JSON -->
     <div class="card">
       <h2>CSV / Excel &rarr; JSON</h2>
-      <p class="hint">Upload the <code>.xlsx</code> (both tabs; text is taken from the <b>unique</b> tab so your edits there are applied) or a single <code>master</code> <code>.csv</code>. Rebuilds a partial JSON in the same template. Fields not in the sheet (object labels, relations, boxes, body-part labels, QC) are emitted empty.</p>
+      <p class="hint">Upload the <code>.xlsx</code> (both tabs) or a single <code>master</code> <code>.csv</code>. A cell you typed over directly always wins; an untouched cell still follows its linked <b>unique</b>-tab text. Rebuilds a partial JSON in the same template. Fields not in the sheet (object labels, relations, boxes, body-part labels, QC) are emitted empty.</p>
       <label class="drop" id="dropC">
         <input type="file" id="fileC" accept=".csv,.xlsx,text/csv" />
         <span><strong>Click</strong> or drop a <strong>.csv</strong> / <strong>.xlsx</strong> file</span>
@@ -82,6 +82,7 @@
   <footer>
     <b>master</b> columns: <code>t3 start</code> &middot; <code>t3 end</code> (child segment frames) &middot; <code>t2 start</code> &middot; <code>t2 end</code> (parent action frames) &middot; <code>t2 id</code> &middot; <code>t2</code> &middot; <code>t3 id</code> &middot; <code>t3</code>. Frames are plain integers so spreadsheets won't turn them into dates. In the <code>.xlsx</code>, <code>t2</code>/<code>t3</code> are <code>VLOOKUP</code> formulas resolving the ids against the <b>unique</b> tab.<br />
     <b>unique</b> columns: <code>t2 id</code> &middot; <code>Unique t2</code> &middot; <code>t2 occurrences</code> &middot; <code>t3 id</code> &middot; <code>Unique t3</code> &middot; <code>t3 occurrences</code> (two independent lists, side by side). Edit text in the <code>Unique&nbsp;t2</code> / <code>Unique&nbsp;t3</code> columns; do not change the id columns.<br />
+    Editing rule: retyping a <b>master</b> <code>t2</code>/<code>t3</code> cell directly always sticks, even if the <b>unique</b> tab still has the old text for that id. Leave a master cell alone and it keeps following <b>unique</b> &mdash; so editing <b>unique</b> is how one change updates every row that shares it.<br />
     Round-trip: every T2 frame range is preserved exactly. Only the body-part label on each T3 segment is lost (rebuilt as <code>"segment"</code>).
   </footer>
 </div>
@@ -187,8 +188,15 @@ function tablesToJson(masterRows, uniqueRows){
   const rows=[];
   for(const r of masterRows){
     const id2 = norm(r["t2 id"] ?? r["T2 id"]), id3 = norm(r["t3 id"] ?? r["T3 id"]);
-    let t2 = (id2 && map2.has(id2)) ? map2.get(id2) : norm(r["t2"] ?? r["T2"]);
-    let t3 = (id3 && map3.has(id3)) ? map3.get(id3) : norm(r["t3"] ?? r["T3"]);
+    // __t2Edited / __t3Edited are set by the xlsx reader below, from whether the
+    // cell still carries the VLOOKUP formula (untouched -> follow "unique") or
+    // was overwritten with a literal value (edited directly -> that wins).
+    // Plain CSV rows never set these, so they default to "edited" and the
+    // literal cell text is always respected there.
+    const t2Edited = r.__t2Edited !== false;
+    const t3Edited = r.__t3Edited !== false;
+    let t2 = (!t2Edited && id2 && map2.has(id2)) ? map2.get(id2) : norm(r["t2"] ?? r["T2"]);
+    let t3 = (!t3Edited && id3 && map3.has(id3)) ? map3.get(id3) : norm(r["t3"] ?? r["T3"]);
     // preferred: separate numeric columns; fallback: legacy "Time stamp"/"t2 range" ranges
     let cs = num(r["t3 start"]), ce = num(r["t3 end"]);
     let ps = num(r["t2 start"]), pe = num(r["t2 end"]);
@@ -344,6 +352,33 @@ runJ.addEventListener("click",async()=>{
   }catch(err){ setLog(logJ,"Error: "+err.message,"err"); }
 });
 
+// Reads a sheet to row objects, and for the given column names, marks each
+// row with __<col>Edited: false when that cell still carries a formula
+// (untouched since export -> should still follow the "unique" tab), true
+// when it holds a plain literal (the user typed over it -> that wins).
+function sheetToRowsWithEditFlags(ws, formulaCols){
+  const rows = XLSX.utils.sheet_to_json(ws, {defval:""});
+  if(!ws["!ref"]) return rows;
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  const header = [];
+  for(let c=range.s.c; c<=range.e.c; c++){
+    const cell = ws[XLSX.utils.encode_cell({r:range.s.r, c})];
+    header.push(cell ? String(cell.v) : "");
+  }
+  const colIdx = {};
+  for(const name of formulaCols) colIdx[name] = header.indexOf(name);
+  rows.forEach((row,i)=>{
+    const r = range.s.r + 1 + i;
+    for(const name of formulaCols){
+      const c = colIdx[name];
+      if(c<0) continue;
+      const cell = ws[XLSX.utils.encode_cell({r,c})];
+      row["__"+name+"Edited"] = !(cell && cell.f); // no formula present -> edited
+    }
+  });
+  return rows;
+}
+
 runC.addEventListener("click",async()=>{
   try{
     setLog(logC,"Working…");
@@ -351,7 +386,7 @@ runC.addEventListener("click",async()=>{
     if(/\.xlsx$/i.test(cFile.name)){
       const wb=XLSX.read(await cFile.arrayBuffer(),{type:"array"});
       const mn=wb.SheetNames.find(n=>n.toLowerCase()==="master")||wb.SheetNames[0];
-      masterRows=XLSX.utils.sheet_to_json(wb.Sheets[mn],{defval:""});
+      masterRows=sheetToRowsWithEditFlags(wb.Sheets[mn], ["t2","t3"]);
       const un=wb.SheetNames.find(n=>n.toLowerCase()==="unique");
       if(un) uniqueRows=XLSX.utils.sheet_to_json(wb.Sheets[un],{defval:""});
     }else{
