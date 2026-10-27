@@ -9,8 +9,9 @@ A single-page browser tool that converts either source format to a `master` /
   so it round-trips exactly and appears as its own `body part` column.
 - **legacy** — a Label Studio VLA export (`annotations[0].result`, `"action"` vs
   body-part `timelinelabels`). The T3→T2 link is inferred by frame-range containment
-  (no explicit parent id in this format). The per-T3 body-part label isn't carried in
-  `master`, so on rebuild it comes back as a placeholder (`"segment"`).
+  (no explicit parent id in this format). The per-T3 body-part label (`R hand`, `L leg/foot`, …) is carried in a
+  `t3 label` master column and restored on rebuild. A workbook lacking that column falls
+  back to the placeholder `"segment"`, which the platform does not display.
 
 - **JSON → spreadsheet** — upload one `.json`, get either
   - an `.xlsx` with a **master** tab (one row per T3 child: `t3 start/end`, parent

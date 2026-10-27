@@ -83,7 +83,7 @@
     <b>master</b> columns: <code>t3 start</code> &middot; <code>t3 end</code> (child segment frames) &middot; <code>t2 start</code> &middot; <code>t2 end</code> (parent action frames) &middot; <code>t2 id</code> &middot; <code>t2</code> &middot; <code>t3 id</code> &middot; <code>t3</code> &middot; <code>body part</code> (unified schema only). Frames are plain integers so spreadsheets won't turn them into dates. In the <code>.xlsx</code>, <code>t2</code>/<code>t3</code> are <code>VLOOKUP</code> formulas resolving the ids against the <b>unique</b> tab.<br />
     <b>unique</b> columns: <code>t2 id</code> &middot; <code>Unique t2</code> &middot; <code>t2 occurrences</code> &middot; <code>t3 id</code> &middot; <code>Unique t3</code> &middot; <code>t3 occurrences</code> (two independent lists, side by side). Edit text in the <code>Unique&nbsp;t2</code> / <code>Unique&nbsp;t3</code> columns; do not change the id columns.<br />
     Editing rule: retyping a <b>master</b> <code>t2</code>/<code>t3</code> cell directly always sticks, even if the <b>unique</b> tab still has the old text for that id. Leave a master cell alone and it keeps following <b>unique</b> &mdash; so editing <b>unique</b> is how one change updates every row that shares it.<br />
-    Round-trip: every T2 frame range is preserved exactly. From the <b>unified</b> schema, <code>body part</code> round-trips exactly too (it's a real column, not guessed). From a <b>legacy</b> VLA export the per-T3 body-part label isn't carried in master at all, so it's rebuilt as a placeholder (<code>"segment"</code>).
+    Round-trip: every T2 frame range is preserved exactly. From the <b>unified</b> schema, <code>body part</code> round-trips exactly too (it's a real column, not guessed). From a <b>legacy</b> VLA export the per-T3 body-part label (R hand, L leg/foot, …) is kept in the <code>t3 label</code> column &mdash; don't delete it. A workbook without that column rebuilds T3 as the placeholder <code>"segment"</code>, which the annotation platform won't display.
   </footer>
 </div>
 
@@ -139,6 +139,8 @@ function buildTables(T2, T3, format){
       "t3": t.txt
     };
     if(format==="unified") row["body part"] = t.bodyPart || "";
+    // legacy: carry the real timelinelabel (R hand, L leg/foot, ...) so rebuild can restore it
+    else row["t3 label"] = t.label || "";
     return row;
   });
 
@@ -173,7 +175,7 @@ function legacyToTables(doc){
     const labels = (v.segments.value && v.segments.value.timelinelabels) || [];
     const rng = (v.segments.value && v.segments.value.ranges && v.segments.value.ranges[0]) || {};
     const txt = (v.description.value && v.description.value.text && v.description.value.text[0]) || "";
-    const rec = {s:Number(rng.start), e:Number(rng.end), txt:txt};
+    const rec = {s:Number(rng.start), e:Number(rng.end), txt:txt, label:labels[0]||""};
     if(!isFinite(rec.s) || !isFinite(rec.e)) continue;
     (labels[0]==="action" ? T2raw : T3raw).push(rec);
   }
@@ -252,7 +254,8 @@ function tablesToJson(masterRows, uniqueRows, format){
     if(cs===null || ce===null) throw new Error("Row missing a valid t3 start/end (or Time stamp).");
     const t2r = (ps!==null && pe!==null) ? ps+"-"+pe : "";
     const bodyPart = norm(r["body part"] ?? r["Body part"] ?? r["Body Part"] ?? "");
-    rows.push({s:cs, e:ce, t2r, t2, t3, bodyPart});
+    const label = norm(r["t3 label"] ?? r["T3 label"] ?? "");
+    rows.push({s:cs, e:ce, t2r, t2, t3, bodyPart, label});
   }
   if(!rows.length) throw new Error("No usable rows in the master sheet.");
   const outFmt = format || (masterRows.some(r=>Object.prototype.hasOwnProperty.call(r,"body part")) ? "unified" : "legacy");
@@ -291,7 +294,7 @@ function buildLegacyJson(groups){
     for(const c of g.children){
       const cid=hexId(12);
       result.push({id:cid, from_name:"segments", to_name:"video", type:"timelinelabels", origin:"manual",
-        value:{ranges:[{start:c.s,end:c.e}], timelinelabels:["segment"]}});
+        value:{ranges:[{start:c.s,end:c.e}], timelinelabels:[c.label || "segment"]}});
       result.push({id:cid, from_name:"description", to_name:"video", type:"textarea", origin:"manual",
         value:{ranges:[{start:c.s,end:c.e}], text:[c.t3]}});
     }
@@ -370,8 +373,9 @@ function buildCsv(objs){
 /* Excel workbook where master's t2 / t3 text cells are live VLOOKUP formulas
    into the unique tab (keyed by id), so editing a description on the unique
    tab updates every matching master row automatically. */
-const M_HEAD_LEGACY=["t3 start","t3 end","t2 start","t2 end","t2 id","t2","t3 id","t3"];
-const M_HEAD_UNIFIED=[...M_HEAD_LEGACY,"body part"];
+const M_HEAD_BASE=["t3 start","t3 end","t2 start","t2 end","t2 id","t2","t3 id","t3"];
+const M_HEAD_LEGACY=[...M_HEAD_BASE,"t3 label"];
+const M_HEAD_UNIFIED=[...M_HEAD_BASE,"body part"];
 const U_HEAD=["t2 id","Unique t2","t2 occurrences","t3 id","Unique t3","t3 occurrences"];
 function buildSyncedWorkbook(master, unique, format){
   const wb=XLSX.utils.book_new();
@@ -475,7 +479,9 @@ runC.addEventListener("click",async()=>{
     download(base+ext, new Blob([JSON.stringify(out,null,1)],{type:"application/json"}));
     const nSeg = outFmt==="unified" ? (out.tier2.length+out.tier3.length)
                : out.annotations[0].result.filter(r=>r.from_name==="segments").length;
-    setLog(logC,"Done — "+masterRows.length+" rows in → "+nSeg+" segments out ("+outFmt+" schema). JSON downloaded.","ok");
+    const noLabel = outFmt==="legacy" && !masterRows.some(r=>String(r["t3 label"]||"").trim());
+    setLog(logC,"Done — "+masterRows.length+" rows in → "+nSeg+" segments out ("+outFmt+" schema). JSON downloaded."
+      + (noLabel ? " WARNING: no “t3 label” column, so T3 segments got the placeholder label “segment” and won't show on the platform. Re-export the sheet from the original JSON with this version." : ""), noLabel?"err":"ok");
   }catch(err){ setLog(logC,"Error: "+err.message,"err"); }
 });
 </script>
